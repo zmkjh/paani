@@ -180,6 +180,9 @@ paani link
 
 # 清理生成文件
 paani clean
+
+# 运行
+paani run
 ```
 
 #### 生成的文件结构
