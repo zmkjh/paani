@@ -977,6 +977,8 @@ mygame/
 │   ├── core.paani        # ECS 定义、system
 │   └── utils/
 │       └── math.paani    # utils 目录：只能放函数
+│   └── libs/
+│       └── libcore.o     # libs 目录：放依赖的库，编译时自动链接
 ├── game/                 # game 包
 │   ├── logic.paani
 │   └── utils/
