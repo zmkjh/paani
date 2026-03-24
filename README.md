@@ -1144,6 +1144,5 @@ export fn get_player_health() -> f32 {
 7. **不支持指针类型** - 没有 `*T` 语法
 8. **extern 函数只在当前包可见** - 不能被其他包通过 `use` 访问，也不需要 `export`
 9. **World 严格隔离** - entity 只能拥有其所在 world 的组件和 trait，不能跨 world 操作
-10. **包前缀语法** - 使用其他包的 ECS 对象时必须加包前缀（如 `engine.Health`）
-11. **main 包调用权限** - main 包可以通过 `export fn` 调用其他包的功能，但不能直接给其他包的 entity 添加组件
+10. **包前缀语法** - 使用其他包的符号时必须加包前缀（如 `engine.Health`）
 12. **exit 只能在 main 包使用** - 普通包（非 entry point）中使用 `exit` 会导致编译错误
