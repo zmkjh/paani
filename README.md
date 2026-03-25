@@ -45,7 +45,7 @@ paani run
 
 ### use 声明
 
-```C
+```c
 use engine;              // 导入 engine 包
 use engine as e;         // 导入并设置别名
 ```
@@ -71,12 +71,12 @@ use engine;  // 只加载 engine.utils/ 下的函数
 
 ### export 规则
 
-```C
+```c
 // 可导出的符号（带 export 关键字）
 export data Position { x: f32, y: f32 }
-export trait Movable [Position, Velocity]
+export trait Movable [Position, Velocity];
 export template Player { Position, Velocity }
-export handle File with fclose
+export handle File with fclose;
 export fn public_api() -> i32 { return 42; }
 
 // 不可导出的符号（包内私有）
@@ -104,7 +104,7 @@ data LocalData { x: i32 }       // data
 
 **❌ 错误示例：**
 
-```paani
+```c
 // main world 的 entity 不能拥有 engine world 的组件
 let player = spawn;  // main world 的 entity
 give player engine.Health: {hp: 100};  // 编译错误！World 不匹配
@@ -112,7 +112,7 @@ give player engine.Health: {hp: 100};  // 编译错误！World 不匹配
 
 **✅ 正确示例：**
 
-```C
+```c
 use engine;
 
 // 通过 engine 的 export fn 创建 engine world 的 entity
@@ -133,7 +133,7 @@ if (player has engine.Health) {
 
 所有 `export fn` 在生成的 C 代码中会自动添加 world 参数：
 
-```C
+```c
 export fn create_player() -> entity {
     let player = spawn;
     give player Health: {hp: 100};
@@ -174,29 +174,29 @@ paani_entity_t main__create_player(paani_world_t* __paani_gen_world) {
 
 ### 数组类型
 
-```C
+```c
 // 数组字面量（仅用于初始化）
-let arr = [1, 2, 3, 4, 5]
-let empty = []
+let arr = [1, 2, 3, 4, 5];
+let empty = [];
 
 // 数组索引
-let first = arr[0]
-arr[1] = 10
+let first = arr[0];
+arr[1] = 10;
 ```
 
 ### 外部类型
 
-```C
+```c
 // 不透明类型，指定大小
-extern type Window[64]
-extern type Texture[32]
+extern type Window[64];
+extern type Texture[32];
 ```
 
 ### Handle 类型（自动资源管理）
 
-```C
+```c
 // 声明带析构函数的资源类型
-handle File with fclose
+handle File with fclose;
 
 // 在组件中使用
 data Asset {
@@ -229,7 +229,7 @@ data Asset {
 ```
 
 **main 包（入口点）：**
-```C
+```c
 // main/main.paani
 use engine;
 
@@ -245,7 +245,7 @@ fn main() {
 ```
 
 **普通包（库）：**
-```C
+```c
 // engine/core.paani
 
 // 全局语句在 module_init() 中执行
@@ -279,7 +279,7 @@ export fn get_config() -> Config {
 
 ### Data（组件）
 
-```C
+```c
 data Position {
     x: f32,
     y: f32
@@ -293,28 +293,28 @@ data Velocity {
 
 ### Trait（特征标签）
 
-```C
+```c
 // 纯标签
-trait Enemy
-trait Player
+trait Enemy;
+trait Player;
 
 // 带依赖的 trait
-trait Movable [Position, Velocity]
-trait Living [Health]
+trait Movable [Position, Velocity];
+trait Living [Health];
 ```
 
 **注意：** Trait 只是标签！不会自动添加组件：
 
-```C
-let e = spawn
-give e Position: {x: 0, y: 0}
-give e Velocity: {vx: 1, vy: 0}
-tag e as Movable   // OK：现在可以标记为 Movable
+```c
+let e = spawn;
+give e Position: {x: 0, y: 0};
+give e Velocity: {vx: 1, vy: 0};
+tag e as Movable;   // OK：现在可以标记为 Movable
 ```
 
 ### Template（实体模板）
 
-```C
+```c
 template Player {
     Position: { x: 100.0, y: 200.0 },
     Velocity: { vx: 0.0, vy: 0.0 },
@@ -324,31 +324,31 @@ template Player {
 
 ### 实体操作
 
-```C
+```c
 // 创建实体
-let e1 = spawn                    // 空实体
-let player = spawn Player         // 从模板创建
+let e1 = spawn;                    // 空实体
+let player = spawn Player;         // 从模板创建
 
 // 添加组件
-give player Position: { x: 10.0, y: 20.0 }
-give player Weapon              // 添加空组件
+give player Position: { x: 10.0, y: 20.0 };
+give player Weapon;              // 添加空组件
 
 // Tag/Untag
-tag player as Elite
-untag player as Movable
+tag player as Elite;
+untag player as Movable;
 
 // 检查组件/Tag
 if (player has Position) { }
 if (player !has Boss) { }        // 检查没有
 
 // 销毁（延迟销毁）
-destroy player
-destroy                          // 销毁当前实体（在 system 中）
+destroy player;
+destroy;                          // 销毁当前实体（在 system 中）
 ```
 
 ### System 定义
 
-```C
+```c
 // 普通 System
 system initSystem() {
     // ...
@@ -356,15 +356,15 @@ system initSystem() {
 
 // Trait System（遍历）
 for Movable in moveSystem(dt: f32) as obj {
-    obj.Position.x += obj.Velocity.vx * dt * 0.001
-    obj.Position.y += obj.Velocity.vy * dt * 0.001
+    obj.Position.x += obj.Velocity.vx * dt * 0.001;
+    obj.Position.y += obj.Velocity.vy * dt * 0.001;
 }
 
 // #batch System（SIMD 优化）
 #batch
 for Movable in physicsSystem(dt: f32) as obj {
-    obj.Position.x += obj.Velocity.vx * dt * 0.001
-    obj.Position.y += obj.Velocity.vy * dt * 0.001
+    obj.Position.x += obj.Velocity.vx * dt * 0.001;
+    obj.Position.y += obj.Velocity.vy * dt * 0.001;
 }
 ```
 
@@ -378,18 +378,18 @@ for Movable in physicsSystem(dt: f32) as obj {
 
 ### System 依赖
 
-```C
+```c
 // 语法：depend A -> B -> C;
-depend inputSystem -> updatePosition -> collisionSystem -> renderSystem
+depend inputSystem -> updatePosition -> collisionSystem -> renderSystem;
 ```
 
 ### Query（查询）
 
-```C
+```c
 // 语法：query Trait with Comp as var { ... }
 query Living with Health as patient {
     if (patient.Health.hp < patient.Health.max) {
-        patient.Health.hp += 5.0 * dt * 0.001
+        patient.Health.hp += 5.0 * dt * 0.001;
     }
 }
 
@@ -405,64 +405,64 @@ query (Movable, Living) as entity {
 
 ### 变量声明
 
-```C
-let x: i32 = 10       // 不可变
-let y = 20            // 类型推断
-var z: f32 = 1.5      // 可变
+```c
+let x: i32 = 10;       // 不可变
+let y = 20;            // 类型推断
+var z: f32 = 1.5;      // 可变
 ```
 
 **注意：** `let` 变量不可重新赋值，需要可变时请使用 `var`。
 
 ### 条件与循环
 
-```C
+```c
 // if-else
 if (x > 0) {
-    return x
+    return x;
 } else if (x < 0) {
-    return -x
+    return -x;
 } else {
-    return 0
+    return 0;
 }
 
 // while
 while (running) {
-    update()
+    update();
 }
 
 // 循环控制
-break
-continue
+break;
+continue;
 ```
 
 ### 函数
 
-```C
+```c
 // 普通函数
 fn add(x: i32, y: i32) -> i32 {
-    return x + y
+    return x + y;
 }
 
 // 导出函数
 export fn create_player() -> entity {
-    let player = spawn Player
-    return player
+    let player = spawn Player;
+    return player;
 }
 
 // 外部 C 函数
-extern fn sin(x: f64) -> f64
-extern fn cos(x: f64) -> f64
+extern fn sin(x: f64) -> f64;
+extern fn cos(x: f64) -> f64;
 ```
 
 ### 其他
 
-```C
+```c
 // 返回
-return x
-return                  // void 函数
+return x;
+return;                  // void 函数
 
 // 退出游戏（只能在 main 包中使用）
-exit
+exit;
 ```
 
 ---
@@ -578,34 +578,34 @@ engine/
 
 ### 基本示例
 
-```C
+```c
 // main.paani
-use engine
+use engine;
 
 data Player { x: f32, y: f32 }
-trait Living [Player]
+trait Living [Player];
 
 for Living in updateSystem(dt: f32) as player {
-    player.Player.x += 1.0 * dt * 0.001
+    player.Player.x += 1.0 * dt * 0.001;
 }
 
 export fn create_player() -> entity {
-    let e = spawn
-    give e Player: {x: 0, y: 0}
-    tag e as Living
-    return e
+    let e = spawn;
+    give e Player: {x: 0, y: 0};
+    tag e as Living;
+    return e;
 }
 ```
 
 ### 跨包操作完整示例
 
-```C
+```c
 // engine/core.paani
 export data Position { x: f32, y: f32 }
 export data Health { hp: f32, max_hp: f32 }
 
-export trait Movable [Position]
-export trait Living [Health]
+export trait Movable [Position];
+export trait Living [Health];
 
 export template PlayerTemplate {
     Position: { x: 0.0, y: 0.0 },
@@ -622,7 +622,7 @@ export fn create_player() -> entity {
 }
 ```
 
-```C
+```c
 // main/main.paani
 use engine;
 
