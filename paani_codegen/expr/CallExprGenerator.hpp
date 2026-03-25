@@ -23,6 +23,7 @@ private:
     const std::unordered_map<std::string, std::string>& packageAliases_;
     const std::unordered_set<std::string>& usedPackages_;
     std::string packageName_;
+    bool isEntryPoint_;  // True if this is the entry point package
     
 public:
     CallExprGenerator(ExprGenerator& exprGen, HandleTracker& handleTracker,
@@ -32,12 +33,14 @@ public:
                       const std::unordered_set<std::string>& internalFunctions,
                       const std::unordered_map<std::string, std::string>& packageAliases,
                       const std::unordered_set<std::string>& usedPackages,
-                      const std::string& packageName)
+                      const std::string& packageName,
+                      bool isEntryPoint = false)
         : exprGen_(exprGen), handleTracker_(handleTracker),
           handleEmitter_(handleTracker, ctx), ctx_(ctx),
           externFunctions_(externFunctions), exportFunctions_(exportFunctions),
           internalFunctions_(internalFunctions), packageAliases_(packageAliases),
-          usedPackages_(usedPackages), packageName_(packageName) {}
+          usedPackages_(usedPackages), packageName_(packageName),
+          isEntryPoint_(isEntryPoint) {}
     
     // Generate call expression
     std::string generate(const CallExpr& expr) {
@@ -136,11 +139,13 @@ private:
             }
             
             // Determine world
+            // Entry point: use target package's world variable
+            // Non-entry point: use current context's world (function parameter)
             std::string worldName;
-            if (usedPackages_.count(targetPackage)) {
+            if (isEntryPoint_ && usedPackages_.count(targetPackage)) {
                 worldName = "__paani_gen_" + targetPackage + "_w";
             } else {
-                worldName = ctx_.getCurrentWorld();
+                worldName = ctx_.getCurrentWorld().empty() ? "__paani_gen_world" : ctx_.getCurrentWorld();
             }
             
             std::string result = fullFuncName + "(" + worldName;

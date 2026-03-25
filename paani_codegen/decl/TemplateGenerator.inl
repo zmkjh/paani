@@ -71,7 +71,10 @@ inline void TemplateGenerator::generateComponentInitializations(const TemplateDe
             std::string fieldName = field.first;
             // Generate expression for field value
             std::string value = generateExprValue(*field.second);
-            ctx_.writeImplLn("__comp_data." + fieldName + " = " + value + ";");
+            // Skip if value is a placeholder (field uses default)
+            if (value.find("/*") == std::string::npos) {
+                ctx_.writeImplLn("__comp_data." + fieldName + " = " + value + ";");
+            }
         }
         
         ctx_.writeImplLn("paani_component_add(__paani_gen_world, e, s_ctype_" + compPrefixed + ", &__comp_data);");

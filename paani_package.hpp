@@ -242,7 +242,25 @@ private:
                 // Build function type
                 auto funcType = std::make_unique<Type>(TypeKind::Function);
                 if (fn->returnType) {
-                    funcType->funcReturn = Type::userDefined(fn->returnType->toString());
+                    // Properly copy the return type based on its kind
+                    switch (fn->returnType->kind) {
+                        case TypeKind::Void: funcType->funcReturn = Type::void_(); break;
+                        case TypeKind::Bool: funcType->funcReturn = Type::bool_(); break;
+                        case TypeKind::I8: funcType->funcReturn = std::make_unique<Type>(TypeKind::I8); break;
+                        case TypeKind::I16: funcType->funcReturn = std::make_unique<Type>(TypeKind::I16); break;
+                        case TypeKind::I32: funcType->funcReturn = std::make_unique<Type>(TypeKind::I32); break;
+                        case TypeKind::I64: funcType->funcReturn = std::make_unique<Type>(TypeKind::I64); break;
+                        case TypeKind::U8: funcType->funcReturn = std::make_unique<Type>(TypeKind::U8); break;
+                        case TypeKind::U16: funcType->funcReturn = std::make_unique<Type>(TypeKind::U16); break;
+                        case TypeKind::U32: funcType->funcReturn = std::make_unique<Type>(TypeKind::U32); break;
+                        case TypeKind::U64: funcType->funcReturn = std::make_unique<Type>(TypeKind::U64); break;
+                        case TypeKind::F32: funcType->funcReturn = std::make_unique<Type>(TypeKind::F32); break;
+                        case TypeKind::F64: funcType->funcReturn = std::make_unique<Type>(TypeKind::F64); break;
+                        case TypeKind::String: funcType->funcReturn = Type::string(); break;
+                        case TypeKind::Entity: funcType->funcReturn = Type::entity(); break;
+                        case TypeKind::UserDefined: funcType->funcReturn = Type::userDefined(fn->returnType->name); break;
+                        default: funcType->funcReturn = Type::void_(); break;
+                    }
                 } else {
                     funcType->funcReturn = Type::void_();
                 }

@@ -11,8 +11,6 @@
 #include "paani_package.hpp"  // For PackageInfo and PackageManager
 #include "paani_codegen/system/SystemGenerator.hpp"
 #include "paani_codegen/system/SystemGenerator.inl"
-#include "paani_codegen/query/QueryGenerator.hpp"
-#include "paani_codegen/query/QueryGenerator.inl"
 #include "paani_codegen/decl/TemplateGenerator.hpp"
 #include "paani_codegen/decl/TemplateGenerator.inl"
 #include "paani_codegen/decl/DependencyGenerator.hpp"

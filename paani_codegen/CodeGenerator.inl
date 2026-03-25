@@ -195,14 +195,15 @@ inline std::string CodeGenerator::generateImpl(const Package& pkg) {
     // Set up system dependencies
     for (const auto& dep : pkg.dependencies) {
         if (dep->systems.size() >= 2) {
-            ctx_.writeImplLn("// Dependency: " + dep->systems[0] + " -> " + dep->systems[1]);
+            ctx_.writeImplLn("// Dependency: " + dep->systems[0] + " -> ... -> " + dep->systems[dep->systems.size()-1]);
             ctx_.writeImplLn("{");
             ctx_.pushIndent();
+            ctx_.writeImplLn("paani_system_t __before, __after;");
             for (size_t i = 0; i + 1 < dep->systems.size(); i++) {
                 std::string before = Naming::system(packageName_, dep->systems[i]);
                 std::string after = Naming::system(packageName_, dep->systems[i + 1]);
-                ctx_.writeImplLn("paani_system_t __before = paani_system_find(__paani_gen_world, \"" + before + "\");");
-                ctx_.writeImplLn("paani_system_t __after = paani_system_find(__paani_gen_world, \"" + after + "\");");
+                ctx_.writeImplLn("__before = paani_system_find(__paani_gen_world, \"" + before + "\");");
+                ctx_.writeImplLn("__after = paani_system_find(__paani_gen_world, \"" + after + "\");");
                 ctx_.writeImplLn("if (__before != PAANI_INVALID_SYSTEM && __after != PAANI_INVALID_SYSTEM) {");
                 ctx_.pushIndent();
                 ctx_.writeImplLn("paani_system_depend(__paani_gen_world, __before, __after);");
@@ -249,6 +250,7 @@ inline std::string CodeGenerator::generateImpl(const Package& pkg) {
 // Setup methods
 inline void CodeGenerator::setupPackage(const Package& pkg) {
     packageName_ = pkg.name;
+    isEntryPoint_ = pkg.isEntryPoint;
     typeMapper_.packageName = pkg.name;
     collectFunctionInfo(pkg);
     collectExternInfo(pkg);
@@ -259,13 +261,11 @@ inline void CodeGenerator::setupPackage(const Package& pkg) {
 
 inline void CodeGenerator::initializeGenerators() {
     systemGen_ = std::make_unique<SystemGenerator>(ctx_, handleTracker_, packageName_);
-    queryGen_ = std::make_unique<QueryGenerator>(ctx_, packageName_);
     templateGen_ = std::make_unique<TemplateGenerator>(ctx_, packageName_);
     depGen_ = std::make_unique<DependencyGenerator>(ctx_, packageName_);
     
     // Set CodeGenerator pointer for statement generation
     if (systemGen_) systemGen_->setCodeGenerator(this);
-    if (queryGen_) queryGen_->setCodeGenerator(this);
     
     // Set trait package map for cross-package trait access
     if (systemGen_) systemGen_->setTraitPackageMap(&traitPackageMap_);
@@ -332,11 +332,14 @@ inline void CodeGenerator::processImports(const Package& pkg) {
             packageAliases_[std::string(use->alias)] = pkgName;
         }
         
-        // Load trait and component information from imported package
-        // Access the package manager to get trait info
-        if (pkg.isEntryPoint) {
-            PackageInfo* importedPkg = packageManager.loadPackageForUse(use->packagePath, use->onlyUtils);
-            if (importedPkg && importedPkg->ast) {
+        // Load information from imported package
+        // Non-entry point files only load utils/ (functions only)
+        bool forceOnlyUtils = !pkg.isEntryPoint;
+        bool onlyUtils = forceOnlyUtils || use->onlyUtils;
+        PackageInfo* importedPkg = packageManager.loadPackageForUse(use->packagePath, onlyUtils);
+        if (importedPkg && importedPkg->ast) {
+            // For entry point: load ECS info and functions
+            if (pkg.isEntryPoint) {
                 // Store component package mapping
                 for (const auto& data : importedPkg->ast->datas) {
                     dataPackageMap_[data->name] = pkgName;
@@ -356,7 +359,22 @@ inline void CodeGenerator::processImports(const Package& pkg) {
                 for (const auto& tmpl : importedPkg->ast->templates) {
                     templatePackageMap_[tmpl->name] = pkgName;
                 }
-                
+            }
+            
+            // Load exported functions from imported package (always needed)
+            for (const auto& fn : importedPkg->ast->functions) {
+                if (fn->isExport && fn->returnType) {
+                    // Use same naming convention as semantic analyzer: pkgName__funcName
+                    std::string fullFuncName = pkgName + "__" + fn->name;
+                    functionReturnTypes_[fullFuncName] = fn->returnType->kind;
+                    if (fn->returnType->kind == TypeKind::UserDefined) {
+                        functionReturnTypeNames_[fullFuncName] = fn->returnType->name;
+                    }
+                }
+            }
+            
+            // For entry point: also load extern functions and types
+            if (pkg.isEntryPoint) {
                 // Load exported extern functions from imported package
                 for (const auto& [funcName, funcType] : importedPkg->exportedExternFunctions) {
                     externFunctions_.insert(funcName);
@@ -996,7 +1014,7 @@ inline void CodeGenerator::generateMultiTraitQueryImpl(const QueryStmt& stmt, co
     
     // Filter by additional traits
     for (size_t i = 1; i < stmt.traitNames.size(); i++) {
-        ctx_.writeImplLn(ctx_.indent() + "if (!paani_entity_has_trait(__paani_gen_world, " + entityVar + 
+        ctx_.writeImplLn(ctx_.indent() + "if (!paani_entity_has_trait(" + queryWorld + ", " + entityVar + 
                          ", " + Naming::traitTypeId(packageName_, stmt.traitNames[i]) + ")) continue;");
     }
     
@@ -1100,17 +1118,50 @@ inline void CodeGenerator::genVarDecl(const VarDeclStmt& stmt) {
     varTypes_[stmt.name] = type;
     if (!handleTypeName.empty()) registerHandleVar(stmt.name, handleTypeName);
     
-    // Track entity world for spawn expressions
+    // Track entity world for spawn expressions and function calls
     if (type == "paani_entity_t" && stmt.init) {
         if (auto* spawnExpr = dynamic_cast<const SpawnExpr*>(stmt.init.get())) {
-            std::string entityWorld = "__paani_gen_world";
+            std::string entityWorld;
             if (!spawnExpr->templateName.empty()) {
                 auto it = templatePackageMap_.find(spawnExpr->templateName);
                 if (it != templatePackageMap_.end() && it->second != packageName_) {
+                    // Cross-package template: use template's package world
                     entityWorld = "__paani_gen_" + it->second + "_w";
+                } else {
+                    // Local template: use current context's world
+                    entityWorld = ctx_.getCurrentWorld();
                 }
+            } else {
+                // Empty spawn: use current context's world
+                entityWorld = ctx_.getCurrentWorld();
+            }
+            // Fallback to default if context world is empty
+            if (entityWorld.empty()) {
+                entityWorld = "__paani_gen_world";
             }
             entityWorlds_[stmt.name] = entityWorld;
+        } else if (auto* callExpr = dynamic_cast<const CallExpr*>(stmt.init.get())) {
+            // Track entity world for function calls that return entity
+            // Check if it's a cross-package function call (e.g., engine.create_player())
+            if (auto* memberExpr = dynamic_cast<const MemberExpr*>(callExpr->callee.get())) {
+                if (auto* pkgId = dynamic_cast<const IdentifierExpr*>(memberExpr->object.get())) {
+                    std::string pkgName = pkgId->name;
+                    // Resolve alias to actual package name
+                    auto aliasIt = packageAliases_.find(pkgName);
+                    if (aliasIt != packageAliases_.end()) {
+                        pkgName = aliasIt->second;
+                    }
+                    // If calling another package's function, entity belongs to that package's world
+                    if (usedPackages_.count(pkgName) && pkgName != packageName_) {
+                        entityWorlds_[stmt.name] = "__paani_gen_" + pkgName + "_w";
+                    } else {
+                        entityWorlds_[stmt.name] = "__paani_gen_world";
+                    }
+                }
+            } else {
+                // Local function call - entity belongs to current world
+                entityWorlds_[stmt.name] = "__paani_gen_world";
+            }
         }
     }
     
@@ -1339,13 +1390,14 @@ inline void CodeGenerator::genUntag(const UntagStmt& stmt) {
 }
 
 inline void CodeGenerator::genDestroy(const DestroyStmt& stmt) {
-    // Entity belongs to the current package's world
-    // Use current world from context (for entry point, it's __paani_gen_this_w)
-    std::string currentWorld = ctx_.getCurrentWorld();
-    std::string worldParam = currentWorld.empty() ? "__paani_gen_world" : currentWorld;
     if (stmt.entity) {
+        // Explicit destroy: infer world from the entity's world
+        std::string worldParam = getEntityWorld(*stmt.entity);
         ctx_.writeImplLn(ctx_.indent() + "paani_entity_destroy(" + worldParam + ", " + genExpr(*stmt.entity) + ");");
     } else {
+        // Implicit destroy in trait system: use current context's world
+        std::string currentWorld = ctx_.getCurrentWorld();
+        std::string worldParam = currentWorld.empty() ? "__paani_gen_world" : currentWorld;
         ctx_.writeImplLn(ctx_.indent() + "paani_entity_destroy_deferred(" + worldParam + ", e);");
     }
 }
@@ -1394,13 +1446,22 @@ inline std::string CodeGenerator::genExpr(const Expr& expr) {
             
             // Check for nested member access (e.g., "obj.Position.x")
             // The object might already be a component pointer (normal mode) or array element (batch mode)
+            // In batch mode, objectStr could be "__col_Position[__idx]" when accessing a field
             for (const auto& pair : componentPointers_) {
-                if (pair.second == objectStr) {
-                    // objectStr is a component pointer/array element
-                    // Normal mode: pointer->member, Batch mode: array[idx].member
-                    if (inBatchSystem_) {
-                        return objectStr + "[__idx]." + memberStr;
-                    } else {
+                // Check if objectStr starts with the component pointer name
+                // Batch mode: "__col_Position[__idx]" should match "__col_Position"
+                std::string colPtrName = pair.second;
+                if (inBatchSystem_) {
+                    // Check if objectStr is "colPtr[__idx]"
+                    std::string expected = colPtrName + "[__idx]";
+                    if (objectStr == expected || objectStr.find(colPtrName + "[__idx]") == 0) {
+                        // This is accessing a field of a component array element
+                        // Return: __col_Position[__idx].field
+                        return objectStr + "." + memberStr;
+                    }
+                } else {
+                    // Normal mode: check exact match
+                    if (pair.second == objectStr) {
                         return objectStr + "->" + memberStr;
                     }
                 }
@@ -1568,10 +1629,15 @@ inline std::string CodeGenerator::genCallExpr(const CallExpr& expr, bool isStmt)
             
             // Check if this is a used package
             if (usedPackages_.count(actualPkgName)) {
-                // Main package calling another package's function
-                // Use target package's world variable
-                std::string worldVar = Naming::worldVar(actualPkgName);
-                std::string result = Naming::exportFunction(actualPkgName, funcName) + "(" + worldVar;
+                // Entry point: use target package's world variable
+                // Non-entry point: use current context's world
+                std::string worldParam;
+                if (isEntryPoint_) {
+                    worldParam = Naming::worldVar(actualPkgName);
+                } else {
+                    worldParam = ctx_.getCurrentWorld().empty() ? "__paani_gen_world" : ctx_.getCurrentWorld();
+                }
+                std::string result = Naming::exportFunction(actualPkgName, funcName) + "(" + worldParam;
                 for (const auto& arg : expr.args) result += ", " + genExpr(*arg);
                 result += ")";
                 return result;
@@ -1602,13 +1668,78 @@ inline std::string CodeGenerator::inferType(const Expr& expr) const {
         if (it != varTypes_.end()) return it->second;
     }
     
+    // Handle binary expressions (arithmetic, bitwise, logical)
+    if (auto* bin = dynamic_cast<const BinaryExpr*>(&expr)) {
+        switch (bin->op) {
+            // Bitwise operations - return integer type
+            case BinOp::BitAnd:
+            case BinOp::BitOr:
+            case BinOp::BitXor:
+            case BinOp::BitShl:
+            case BinOp::BitShr:
+                return "int32_t";
+            // Logical operations - return bool (int)
+            case BinOp::And:
+            case BinOp::Or:
+                return "int";
+            // Comparison operations - return bool (int)
+            case BinOp::Eq:
+            case BinOp::Ne:
+            case BinOp::Lt:
+            case BinOp::Gt:
+            case BinOp::Le:
+            case BinOp::Ge:
+                return "int";
+            // Arithmetic operations - infer from operands
+            case BinOp::Add:
+            case BinOp::Sub:
+            case BinOp::Mul:
+            case BinOp::Div:
+            case BinOp::Mod: {
+                std::string leftType = inferType(*bin->left);
+                if (leftType == "float" || leftType == "double") return leftType;
+                std::string rightType = inferType(*bin->right);
+                if (rightType == "float" || rightType == "double") return rightType;
+                return "int32_t";
+            }
+            default:
+                return "int32_t";
+        }
+    }
+    
+    // Handle unary expressions
+    if (auto* un = dynamic_cast<const UnaryExpr*>(&expr)) {
+        switch (un->op) {
+            case UnOp::Not:
+                return "int";  // bool
+            case UnOp::Neg:
+                return inferType(*un->operand);
+            default:
+                return "int32_t";
+        }
+    }
+    
     if (auto* call = dynamic_cast<const CallExpr*>(&expr)) {
+        std::string funcName;
+        
+        // Handle direct function call (e.g., create_player())
         if (auto* id = dynamic_cast<const IdentifierExpr*>(call->callee.get())) {
-            auto typeIt = functionReturnTypeNames_.find(id->name);
+            funcName = id->name;
+        }
+        // Handle cross-package function call (e.g., engine.create_player())
+        else if (auto* memberExpr = dynamic_cast<const MemberExpr*>(call->callee.get())) {
+            if (auto* pkgId = dynamic_cast<const IdentifierExpr*>(memberExpr->object.get())) {
+                // Use same naming convention as semantic analyzer: pkgName__funcName
+                funcName = std::string(pkgId->name) + "__" + memberExpr->member;
+            }
+        }
+        
+        if (!funcName.empty()) {
+            auto typeIt = functionReturnTypeNames_.find(funcName);
             if (typeIt != functionReturnTypeNames_.end() && typeMapper_.handleTypes.count(typeIt->second)) {
                 return "void*";
             }
-            auto it = functionReturnTypes_.find(id->name);
+            auto it = functionReturnTypes_.find(funcName);
             if (it != functionReturnTypes_.end()) {
                 switch (it->second) {
                     case TypeKind::Void: return "void";
@@ -1665,8 +1796,9 @@ inline std::string CodeGenerator::getEntityWorld(const Expr& entityExpr) {
             return it->second;
         }
     }
-    // Default to current package's world
-    return "__paani_gen_world";
+    // Default to current context's world
+    std::string currentWorld = ctx_.getCurrentWorld();
+    return currentWorld.empty() ? "__paani_gen_world" : currentWorld;
 }
 
 // Generate lock/unlock calls for system synchronization

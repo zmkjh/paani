@@ -176,6 +176,17 @@ private:
     std::string typeKindToString(TypeKind kind);
     void checkTypeCompatibility(const Location& loc, TypeKind expected, TypeKind actual, const std::string& context);
 
+    // F-string checking methods
+    bool isFStringExpr(Expr& expr) const {
+        return dynamic_cast<FStringExpr*>(&expr) != nullptr;
+    }
+
+    void checkFStringNotStored(Expr& expr, const Location& loc, const std::string& context) {
+        if (isFStringExpr(expr)) {
+            reportError(loc, context + " F-string can only be used directly as function arguments, not stored or returned.");
+        }
+    }
+
     // World checking methods (only for entry point / main package)
     std::string getDataPackage(const std::string& dataName);
     std::string getTraitPackage(const std::string& traitName);
@@ -1091,6 +1102,8 @@ inline void SemanticAnalyzer::visit(BinaryExpr& node) {
                     reportError(node.loc, "Cannot assign to string index. Strings are immutable in Paani.");
                 }
             }
+            // Check: f-string cannot be assigned (to variable, array element, or struct field)
+            checkFStringNotStored(*node.right, node.loc, "Cannot assign f-string:");
             break;
 
         case BinOp::AddAssign:
@@ -1522,6 +1535,9 @@ inline void SemanticAnalyzer::visit(VarDeclStmt& node) {
         node.init->accept(*this);
         allowArrayLiteral_ = false;
 
+        // Check: f-string cannot be stored in a variable
+        checkFStringNotStored(*node.init, node.loc, "Cannot initialize variable '" + node.name + "' with f-string:");
+
         // Infer type from initialization if no explicit type
         if (!node.type) {
             auto initType = inferTypeKind(*node.init);
@@ -1584,6 +1600,9 @@ inline void SemanticAnalyzer::visit(ReturnStmt& node) {
         auto returnValueType = inferTypeKind(*node.value);
         checkTypeCompatibility(node.loc, currentReturnType_, returnValueType,
             "Return type mismatch");
+
+        // Check: f-string cannot be returned
+        checkFStringNotStored(*node.value, node.loc, "Cannot return f-string:");
     } else if (currentReturnType_ != TypeKind::Void) {
         reportError(node.loc, "Function must return a value of type " + typeKindToString(currentReturnType_));
     }
@@ -2327,6 +2346,19 @@ inline TypeKind SemanticAnalyzer::inferTypeKind(Expr& expr) {
                 return it->second;
             }
             return TypeKind::I32;  // Fallback
+        } else if (objType == TypeKind::Array) {
+            // For regular array variables, infer from the variable's element type
+            // Try to get element type from the array variable
+            if (auto* idExpr = dynamic_cast<IdentifierExpr*>(idxExpr->object.get())) {
+                // Look up variable type in all scopes (from inner to outer)
+                for (auto it = varTypes_.rbegin(); it != varTypes_.rend(); ++it) {
+                    auto varIt = it->find(idExpr->name);
+                    if (varIt != it->end() && varIt->second->kind == TypeKind::Array && varIt->second->base) {
+                        return varIt->second->base->kind;
+                    }
+                }
+            }
+            return TypeKind::I32;  // Default fallback for arrays
         }
         return TypeKind::Void;
     } else if (auto* arrLitExpr = dynamic_cast<ArrayLiteralExpr*>(&expr)) {

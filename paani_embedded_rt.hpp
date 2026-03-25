@@ -172,8 +172,18 @@ int paani_query_soa_get(paani_world_t* world,
                         uint32_t num_types,
                         paani_query_soa_t* out_soa);
 
+// Fast SoA view from existing query (no malloc/lookup overhead)
+int paani_query_trait_soa(paani_query_t* query, paani_query_soa_t* out_soa);
+
 // Release SoA view
 void paani_query_soa_release(paani_query_soa_t* soa);
+
+// ============ Direct Batch Access (Maximum Performance) ============
+// Get archetype count for batch-optimized systems
+uint32_t paani_query_batch_count(paani_query_t* query);
+
+// Get component column pointer directly (zero overhead)
+void* paani_query_batch_column(paani_query_t* query, uint32_t component_index);
 
 // ============ System ============
 
@@ -1953,16 +1963,24 @@ int paani_query_get(paani_query_t* query,
     if (PAANI_LIKELY(query->num_archetypes == 1)) {
         paani_archetype_t* arch = query->archetypes[0];
         if (PAANI_UNLIKELY(index >= arch->count)) return 0;
-        
+
         *out_entity = arch->entities[index];
-        
-        // Fill component pointers
-        for (uint32_t i = 0; i < query->num_types; i++) {
-            uint32_t type_idx = query->component_indices[0][i];
-            if (type_idx != (uint32_t)-1 && type_idx < arch->num_types) {
+
+        // Unroll loop for common cases (1-2 components)
+        // Fast path: no NULL checks needed for component queries (trait queries may need them)
+        if (query->num_types == 1) {
+            uint32_t type_idx = query->component_indices[0][0];
+            out_components[0] = (char*)arch->component_data[type_idx] + index * arch->component_sizes[type_idx];
+        } else if (query->num_types == 2) {
+            uint32_t type_idx0 = query->component_indices[0][0];
+            uint32_t type_idx1 = query->component_indices[0][1];
+            out_components[0] = (char*)arch->component_data[type_idx0] + index * arch->component_sizes[type_idx0];
+            out_components[1] = (char*)arch->component_data[type_idx1] + index * arch->component_sizes[type_idx1];
+        } else {
+            // Generic case
+            for (uint32_t i = 0; i < query->num_types; i++) {
+                uint32_t type_idx = query->component_indices[0][i];
                 out_components[i] = (char*)arch->component_data[type_idx] + index * arch->component_sizes[type_idx];
-            } else {
-                out_components[i] = NULL;
             }
         }
         return 1;
@@ -1977,13 +1995,37 @@ int paani_query_get(paani_query_t* query,
             // Found it
             uint32_t row = remaining;
             *out_entity = arch->entities[row];
-            
-            for (uint32_t i = 0; i < query->num_types; i++) {
-                uint32_t type_idx = query->component_indices[arch_idx][i];
+
+            // Unroll loop for common cases (1-2 components)
+            if (query->num_types == 1) {
+                uint32_t type_idx = query->component_indices[arch_idx][0];
                 if (type_idx != (uint32_t)-1 && type_idx < arch->num_types) {
-                    out_components[i] = (char*)arch->component_data[type_idx] + row * arch->component_sizes[type_idx];
+                    out_components[0] = (char*)arch->component_data[type_idx] + row * arch->component_sizes[type_idx];
                 } else {
-                    out_components[i] = NULL;
+                    out_components[0] = NULL;
+                }
+            } else if (query->num_types == 2) {
+                uint32_t type_idx0 = query->component_indices[arch_idx][0];
+                uint32_t type_idx1 = query->component_indices[arch_idx][1];
+                if (type_idx0 != (uint32_t)-1 && type_idx0 < arch->num_types) {
+                    out_components[0] = (char*)arch->component_data[type_idx0] + row * arch->component_sizes[type_idx0];
+                } else {
+                    out_components[0] = NULL;
+                }
+                if (type_idx1 != (uint32_t)-1 && type_idx1 < arch->num_types) {
+                    out_components[1] = (char*)arch->component_data[type_idx1] + row * arch->component_sizes[type_idx1];
+                } else {
+                    out_components[1] = NULL;
+                }
+            } else {
+                // Generic case
+                for (uint32_t i = 0; i < query->num_types; i++) {
+                    uint32_t type_idx = query->component_indices[arch_idx][i];
+                    if (type_idx != (uint32_t)-1 && type_idx < arch->num_types) {
+                        out_components[i] = (char*)arch->component_data[type_idx] + row * arch->component_sizes[type_idx];
+                    } else {
+                        out_components[i] = NULL;
+                    }
                 }
             }
             return 1;
@@ -2034,6 +2076,50 @@ void paani_query_soa_release(paani_query_soa_t* soa) {
     free(soa->component_columns);
     soa->component_columns = NULL;
     soa->count = 0;
+}
+
+// ============ Direct Batch Access (Maximum Performance) ============
+
+uint32_t paani_query_batch_count(paani_query_t* query) {
+    if (!query || query->num_archetypes == 0) return 0;
+    return query->archetypes[0]->count;
+}
+
+void* paani_query_batch_column(paani_query_t* query, uint32_t component_index) {
+    if (!query || query->num_archetypes == 0) return NULL;
+    if (component_index >= query->num_types) return NULL;
+    paani_archetype_t* arch = query->archetypes[0];
+    uint32_t type_idx = query->component_indices[0][component_index];
+    if (type_idx == (uint32_t)-1 || type_idx >= arch->num_types) return NULL;
+    return arch->component_data[type_idx];
+}
+
+// Fast SoA view from existing trait query - no malloc/lookup overhead
+// Caller must provide stack-allocated array for component_columns (e.g., void* cols[8])
+int paani_query_trait_soa(paani_query_t* query, paani_query_soa_t* out_soa) {
+    if (!query || !out_soa) return 0;
+    if (query->num_archetypes == 0) return 0;
+
+    // For single archetype (most common case), use it directly
+    // For multiple archetypes, use the first one
+    paani_archetype_t* arch = query->archetypes[0];
+
+    // Note: caller must provide component_columns array!
+    // out_soa->component_columns should point to caller-allocated array
+    out_soa->num_types = query->num_types;
+    out_soa->count = arch->count;
+
+    // Use pre-computed component_indices from query (no lookup needed!)
+    for (uint32_t i = 0; i < query->num_types; i++) {
+        uint32_t type_idx = query->component_indices[0][i];
+        if (type_idx != (uint32_t)-1 && type_idx < arch->num_types) {
+            out_soa->component_columns[i] = arch->component_data[type_idx];
+        } else {
+            out_soa->component_columns[i] = NULL;
+        }
+    }
+
+    return 1;
 }
 
 // ============ System ============

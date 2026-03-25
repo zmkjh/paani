@@ -11,7 +11,6 @@
 
 // New modular generators
 #include "system/SystemGenerator.hpp"
-#include "query/QueryGenerator.hpp"
 #include "decl/TemplateGenerator.hpp"
 #include "decl/DependencyGenerator.hpp"
 
@@ -70,7 +69,6 @@ public:
     
     // New modular generators
     std::unique_ptr<SystemGenerator> systemGen_;
-    std::unique_ptr<QueryGenerator> queryGen_;
     std::unique_ptr<TemplateGenerator> templateGen_;
     std::unique_ptr<DependencyGenerator> depGen_;
     
@@ -79,6 +77,7 @@ public:
     bool inTraitSystem_ = false;
     bool inBatchSystem_ = false;  // True when generating batch-optimized system (SoA mode)
     std::unordered_map<std::string, std::string> componentPointers_;
+    bool isEntryPoint_ = false;   // True if this is the entry point package (main)
     
 public:
     // Package manager for accessing imported packages

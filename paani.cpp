@@ -103,8 +103,10 @@ struct CliPackageInfo {
     std::string name;
     fs::path path;
     std::vector<fs::path> sourceFiles;
+    std::vector<fs::path> utilsFiles;  // Files in utils/ directory (functions only)
     std::vector<fs::path> staticLibs;
     std::vector<std::string> dependencies;
+    bool isUtilsOnly = false;  // For non-main package use, only load utils
 };
 
 class Project {
@@ -141,16 +143,27 @@ public:
         }
     }
 
-    CliPackageInfo discoverPackage(const std::string& name, const fs::path& path) {
+    CliPackageInfo discoverPackage(const std::string& name, const fs::path& path, bool utilsOnly = false) {
         CliPackageInfo pkg;
         pkg.name = name;
         pkg.path = path;
+        pkg.isUtilsOnly = utilsOnly;
+        
         for (const auto& entry : fs::recursive_directory_iterator(path)) {
             if (entry.is_regular_file() && entry.path().extension() == ".paani") {
-                pkg.sourceFiles.push_back(entry.path());
+                // Check if file is in utils/ directory
+                std::string relativePath = fs::relative(entry.path(), path).string();
+                if (relativePath.find("utils/") == 0 || relativePath.find("utils\\") == 0) {
+                    pkg.utilsFiles.push_back(entry.path());
+                } else {
+                    pkg.sourceFiles.push_back(entry.path());
+                }
             }
         }
+        
         std::sort(pkg.sourceFiles.begin(), pkg.sourceFiles.end());
+        std::sort(pkg.utilsFiles.begin(), pkg.utilsFiles.end());
+        
         // Discover libs directory (optional) - supports static and dynamic libraries
         fs::path libsDir = path / "libs";
         if (fs::exists(libsDir)) {
@@ -229,12 +242,52 @@ bool compilePackage(CliPackageInfo& pkg, const fs::path& outputDir,
             ConsoleColor::printHighlight(pkg.name + "\n");
         }
         std::string mergedSource;
+        std::string utilsSource;
+        
+        // Process main source files
         for (const auto& file : pkg.sourceFiles) {
             mergedSource += "// ===== " + file.filename().string() + " =====\n";
             mergedSource += readFile(file.string());
             mergedSource += "\n\n";
         }
-        Parser parser(mergedSource, pkg.name);
+        
+        // Process utils files (functions only)
+        for (const auto& file : pkg.utilsFiles) {
+            std::string utilsContent = readFile(file.string());
+            
+            // Check that utils files only contain functions
+            // Simple check: look for ECS keywords that shouldn't be in utils
+            std::vector<std::string> ecsKeywords = {
+                "data ",      // 组件定义
+                "trait ",     // trait 定义
+                "template ",  // 模板定义
+                "system ",    // 系统定义
+                "#batch",     // 批处理属性
+                "spawn",      // 创建实体
+                "destroy",    // 销毁实体
+                "tag ",       // 添加标签
+                "untag ",     // 移除标签
+                "query ",     // 查询
+                "entity"      // 实体类型
+            };
+            for (const auto& keyword : ecsKeywords) {
+                if (utilsContent.find(keyword) != std::string::npos) {
+                    ConsoleColor::printErrorPrefix();
+                    std::cerr << " Error in utils/ file " << file.filename().string() 
+                              << ": utils/ directory can only contain pure functions, not ECS-related code (data/trait/template/system/spawn/destroy/tag/untag/query/entity)\n";
+                    return false;
+                }
+            }
+            
+            utilsSource += "// ===== utils/" + file.filename().string() + " =====\n";
+            utilsSource += utilsContent;
+            utilsSource += "\n\n";
+        }
+        
+        // Combine sources
+        std::string allSource = mergedSource + utilsSource;
+        
+        Parser parser(allSource, pkg.name);
         parser.setEntryPoint(isEntryPoint);
         auto ast = parser.parse();
         if (!ast) {
@@ -249,12 +302,17 @@ bool compilePackage(CliPackageInfo& pkg, const fs::path& outputDir,
             sema.packageManager.searchPaths.push_back(projectRoot);
         }
         try {
-            sema.analyze(*ast, mergedSource);
+            sema.analyze(*ast, allSource);
         } catch (const std::runtime_error& e) {
             std::cerr << e.what();
             return false;
         }
         CodeGenerator codegen;
+        // Set project root as search path for package imports in codegen
+        if (!projectRoot.empty()) {
+            codegen.packageManager.searchPaths.clear();
+            codegen.packageManager.searchPaths.push_back(projectRoot);
+        }
         std::string header = codegen.generateHeader(*ast);
         std::string impl = codegen.generateImpl(*ast);
         fs::path headerFile = outputDir / (pkg.name + ".h");
